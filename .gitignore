@@ -1,3 +1,2 @@
-membros_mock_1000000.csv
-membros_mock_50.csv
+*.csv
 go.sum

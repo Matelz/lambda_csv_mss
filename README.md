@@ -14,9 +14,9 @@ This project is a Lambda function designed to parse CSV files containing member 
 
 ## To-Do
 
+- [X] Implement DynamoDB integration.
 - [ ] Implement lambda function to trigger on CSV upload.
 - [ ] Implement dynamoDB table checks and error handling.
 - [ ] Add logging for better traceability.
 - [ ] Implement unit tests for CSV parsing and data storage functions.
 - [ ] Implement DynamoDB item existence check before insertion.
-- [ ] Implement hashing for duplicate detection.
