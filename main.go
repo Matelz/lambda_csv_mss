@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"golangcsvparser/db"
+	"golangcsvparser/mock"
 	"golangcsvparser/types"
 
 	"encoding/csv"
@@ -76,9 +77,11 @@ func parseCSV(filePath string, csvReady chan CSVParserResult) {
 }
 
 func main() {
+	mock.GenerateMemberMock(5000)
+
 	csvReady := make(chan CSVParserResult)
 	go func() {
-		parseCSV("membros_mock_500.csv", csvReady)
+		parseCSV("membros_mock_5000.csv", csvReady)
 	}()
 
 	startTime := time.Now()
@@ -108,5 +111,5 @@ func main() {
 
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
-	fmt.Printf("Total Alloc: %v MiB\n", (m.TotalAlloc)/(1<<20))
+	fmt.Printf("Total Alloc: %v Bytes\n", m.TotalAlloc)
 }
