@@ -15,7 +15,6 @@ require (
 )
 
 require (
-	github.com/aws/aws-lambda-go v1.49.0 // indirect
 	github.com/aws/aws-sdk-go-v2 v1.38.0 // indirect
 	github.com/aws/aws-sdk-go-v2/config v1.31.0
 	github.com/aws/aws-sdk-go-v2/internal/configsources v1.4.3 // indirect
@@ -23,5 +22,5 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.13.0 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/endpoint-discovery v1.11.3 // indirect
 	github.com/aws/smithy-go v1.22.5 // indirect
-	github.com/brianvoe/gofakeit/v7 v7.3.0 // indirect
+	github.com/brianvoe/gofakeit/v7 v7.3.0
 )
