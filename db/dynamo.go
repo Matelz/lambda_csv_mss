@@ -2,13 +2,9 @@ package db
 
 import (
 	"context"
-	t "golangcsvparser/types"
 	"log"
-	"sync"
-	"sync/atomic"
 
 	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
@@ -36,61 +32,27 @@ func NewTableBasis(tableName string, client *dynamodb.Client) TableBasis {
 	}
 }
 
-func (tb TableBasis) AddMembersBatch(ctx context.Context, members []t.EntradaMembro, maxMembers int) (int, error) {
-	var wg sync.WaitGroup
+func (tb TableBasis) AddMembersBatch(ctx context.Context, requests []types.WriteRequest) (int, error) {
 	var written int64 = 0
 
-	batchSize := 25
-	start := 0
-	end := start + batchSize
+	batch := make(map[string][]types.WriteRequest)
 
-	for start < maxMembers && start < len(members) {
-		wg.Add(1)
+	batch["members"] = requests
 
-		go func(start, end int) {
-			defer wg.Done()
-
-			batch := make(map[string][]types.WriteRequest)
-			var requests []types.WriteRequest
-
-			for i := start; i != end; i++ {
-				item, err := attributevalue.MarshalMap(members[i])
-				if err != nil {
-					log.Printf("Error marshalling item %d: %v", i, err)
-					continue
-				}
-
-				requests = append(requests, types.WriteRequest{
-					PutRequest: &types.PutRequest{
-						Item: item,
-					},
-				})
-			}
-
-			batch["members"] = requests
-
-			op, err := tb.DynamoDbClient.BatchWriteItem(ctx, &dynamodb.BatchWriteItemInput{
-				RequestItems: batch,
-			})
-			if err != nil {
-				log.Printf("Error writing batch from %d to %d: %v", start, end, err)
-				return
-			}
-
-			if len(op.UnprocessedItems) > 0 {
-				log.Printf("Unprocessed items from %d to %d: %v", start, end, op.UnprocessedItems)
-			} else {
-				log.Printf("Successfully wrote batch from %d to %d", start, end)
-			}
-
-			atomic.AddInt64(&written, int64(len(requests)))
-		}(start, end)
-
-		start = end
-		end += batchSize
+	op, err := tb.DynamoDbClient.BatchWriteItem(ctx, &dynamodb.BatchWriteItemInput{
+		RequestItems: batch,
+	})
+	if err != nil {
+		return 0, err
 	}
 
-	wg.Wait()
+	if len(op.UnprocessedItems) > 0 {
+		log.Printf("Unprocessed items: %v", op.UnprocessedItems)
+	} else {
+		log.Printf("Successfully wrote batch")
+	}
+
+	written = int64(len(requests))
 
 	if written == 0 {
 		return 0, nil

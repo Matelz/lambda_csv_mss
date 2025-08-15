@@ -5,14 +5,21 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"runtime"
+	"sync"
 	"time"
 
 	"golangcsvparser/db"
-	"golangcsvparser/mock"
-	"golangcsvparser/types"
+	t "golangcsvparser/types"
 
+	"bufio"
 	"encoding/csv"
+	"strings"
+
+	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
+
+	"github.com/aws/aws-lambda-go/events"
+	"github.com/aws/aws-lambda-go/lambda"
 )
 
 var ExpectedHeaders = [7]string{
@@ -25,67 +32,91 @@ var ExpectedHeaders = [7]string{
 	"entidade",
 }
 
-type CSVParserResult struct {
-	Members []types.EntradaMembro
-	Count   int
-	Err     error
+func parseRow(row string) t.EntradaMembro {
+	values := csv.NewReader(strings.NewReader(row))
+	record, err := values.Read()
+	if err != nil {
+		fmt.Printf("Error reading CSV row: %v\n", err)
+		return t.EntradaMembro{}
+	}
+
+	if len(record) != len(ExpectedHeaders) {
+		fmt.Printf("Unexpected number of columns. Expected %d, got %d\n", len(ExpectedHeaders), len(record))
+		return t.EntradaMembro{}
+	}
+
+	member := t.EntradaMembro{
+		Nome:     record[0],
+		RA:       record[1],
+		Curso:    record[2],
+		Serie:    record[3],
+		Role:     record[4],
+		Status:   record[5],
+		Entidade: record[6],
+	}
+
+	return member
 }
 
-// The files are temporarily accessed as a file path, but later they will be read from the lambda event
-func parseCSV(filePath string, csvReady chan CSVParserResult) {
-	file, err := os.Open(filePath)
+// The files are temporarily accessed as a file path, but later they will be read from S3 or another storage service.
+func parseCSV(filePath string, tb db.TableBasis) error {
+	f, err := os.Open(filePath)
 	if err != nil {
-		csvReady <- CSVParserResult{Err: fmt.Errorf("error opening CSV file: %w", err)}
-		return
+		return fmt.Errorf("error opening CSV file: %w", err)
 	}
+	defer f.Close()
 
-	defer file.Close()
+	scanner := bufio.NewScanner(f)
+	scanner.Scan()
 
-	reader := csv.NewReader(file)
-	records, err := reader.ReadAll()
-	if err != nil {
-		csvReady <- CSVParserResult{Err: fmt.Errorf("error reading CSV file: %w", err)}
-		return
-	}
+	var counter int = 0
+	var buffer []types.WriteRequest
 
-	if len(records) == 0 {
-		csvReady <- CSVParserResult{Err: errors.New("no records found in the CSV file")}
-		return
-	}
+	var wg sync.WaitGroup
 
-	// Exclude the header row
-	var members = make([]types.EntradaMembro, len(records)-1)
+	for scanner.Scan() {
+		row := scanner.Text()
+		member := parseRow(row)
 
-	for i, record := range records[1:] {
-		if len(record) != len(ExpectedHeaders) {
-			csvReady <- CSVParserResult{Err: fmt.Errorf("record %d does not match expected headers. Expected %d fields, got %d", i+1, len(ExpectedHeaders), len(record))}
-			return
+		counter++
+
+		item, err := attributevalue.MarshalMap(member)
+		if err != nil {
+			fmt.Printf("Error marshalling item %d: %v\n", counter, err)
+			continue
 		}
 
-		members[i] = types.EntradaMembro{
-			Nome:     record[0],
-			RA:       record[1],
-			Curso:    record[2],
-			Serie:    record[3],
-			Role:     record[4],
-			Status:   record[5],
-			Entidade: record[6],
+		buffer = append(buffer, types.WriteRequest{
+			PutRequest: &types.PutRequest{
+				Item: item,
+			},
+		})
+
+		if len(buffer) >= 25 {
+			wg.Add(1)
+			go func(members []types.WriteRequest) {
+				defer wg.Done()
+				tb.AddMembersBatch(context.Background(), members)
+			}(buffer)
+
+			buffer = nil
 		}
 	}
 
-	csvReady <- CSVParserResult{Members: members, Count: len(members), Err: nil}
+	if len(buffer) > 0 {
+		wg.Add(1)
+		go func(members []types.WriteRequest) {
+			defer wg.Done()
+			tb.AddMembersBatch(context.Background(), members)
+		}(buffer)
+	}
+
+	wg.Wait()
+
+	return nil
 }
 
-func main() {
-	mock.GenerateMemberMock(5000)
-
-	csvReady := make(chan CSVParserResult)
-	go func() {
-		parseCSV("membros_mock_5000.csv", csvReady)
-	}()
-
-	startTime := time.Now()
-
+func handler(ctx context.Context, event map[string]interface{}) (events.APIGatewayProxyResponse, error) {
 	client, err := db.NewClient()
 	if err != nil {
 		panic(err)
@@ -94,22 +125,16 @@ func main() {
 	tableBasis := db.NewTableBasis("members", client)
 
 	// TODO: Set actual timeout duration
-	cntx, cancel := context.WithTimeoutCause(context.Background(), 200*time.Second, errors.New("timeout exceeded while writing to DynamoDB"))
+	_, cancel := context.WithTimeoutCause(context.Background(), 150*time.Second, errors.New("timeout exceeded while writing to DynamoDB"))
 	defer cancel()
 
-	result := <-csvReady
-	if result.Err != nil {
-		fmt.Println("Error parsing CSV:", result.Err)
-		return
-	}
+	parseCSV("membros_mock_10.csv", tableBasis)
 
-	tableBasis.AddMembersBatch(cntx, result.Members, result.Count)
+	return events.APIGatewayProxyResponse{
+		StatusCode: 200,
+	}, nil
+}
 
-	elapsedTime := time.Since(startTime)
-
-	println("Elapsed time:", elapsedTime.String())
-
-	var m runtime.MemStats
-	runtime.ReadMemStats(&m)
-	fmt.Printf("Total Alloc: %v Bytes\n", m.TotalAlloc)
+func main() {
+	lambda.Start(handler)
 }
