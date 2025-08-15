@@ -42,7 +42,7 @@ jobs:
       - name: Upload to S3
         run: |
             aws lambda update-function-code \
-                --function-name my-lambda-function \
+                --function-name myFunction \
                 --zip-file fileb://application.zip \
 
       - name: Clean up
