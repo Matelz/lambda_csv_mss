@@ -113,8 +113,7 @@ func parseCSV(fileObj *s3.GetObjectOutput, tb db.DynamoTableBasics, ctx context.
 }
 
 func generateConfig(ctx context.Context) (aws.Config, error) {
-	// cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion("us-east-1"))
-	cfg, err := config.LoadDefaultConfig(ctx, config.WithSharedConfigProfile("test"))
+	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion("us-east-1"))
 	if err != nil {
 		log.Fatal(err)
 		return cfg, err
