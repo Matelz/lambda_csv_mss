@@ -4,7 +4,7 @@ import (
 	"context"
 	"log"
 
-	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
@@ -14,12 +14,7 @@ type TableBasis struct {
 	TableName      string
 }
 
-func NewClient() (*dynamodb.Client, error) {
-	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithSharedConfigProfile("test"))
-	if err != nil {
-		log.Fatal(err)
-	}
-
+func NewClient(cfg aws.Config, ctx context.Context) (*dynamodb.Client, error) {
 	client := dynamodb.NewFromConfig(cfg)
 
 	return client, nil
