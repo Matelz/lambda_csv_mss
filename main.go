@@ -2,20 +2,20 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"sync"
 	"log"
+	"sync"
 
-	"golangcsvparser/db" 
-	t "golangcsvparser/types"
 	"bufio"
 	"encoding/csv"
+	"golangcsvparser/db"
+	t "golangcsvparser/types"
 	"strings"
+
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	s3Types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
@@ -59,8 +59,7 @@ func parseRow(row string) t.EntradaMembro {
 	return member
 }
 
-// The files are temporarily accessed as a file path, but later they will be read from S3 or another storage service.
-func parseCSV(fileObj *s3.GetObjectOutput, tb db.TableBasis, ctx context.Context) error {
+func parseCSV(fileObj *s3.GetObjectOutput, tb db.DynamoTableBasics, ctx context.Context) error {
 	defer fileObj.Body.Close()
 
 	scanner := bufio.NewScanner(fileObj.Body)
@@ -89,7 +88,7 @@ func parseCSV(fileObj *s3.GetObjectOutput, tb db.TableBasis, ctx context.Context
 			},
 		})
 
-		if len(buffer) >= 25 {
+		if len(buffer) >= 10 {
 			wg.Add(1)
 			go func(members []types.WriteRequest) {
 				defer wg.Done()
@@ -113,29 +112,9 @@ func parseCSV(fileObj *s3.GetObjectOutput, tb db.TableBasis, ctx context.Context
 	return nil
 }
 
-type BucketBasics struct {
-	S3Client *s3.Client
-}
-
-func (basics BucketBasics) downloadFile(ctx context.Context, object *s3.GetObjectInput) (*s3.GetObjectOutput, error) {
-	result, err := basics.S3Client.GetObject(ctx, object)
-	if err != nil {
-		var noKey *s3Types.NoSuchKey
-		if errors.As(err, &noKey) {
-			log.Printf("Can't get object %s from bucket %s. No such key exists.\n", object.Key, object.Bucket)
-			err = noKey
-		} else {
-			log.Printf("Couldn't get object %v:%v. Here's why: %v\n", object.Bucket, object.Key, err)
-		}
-		return nil, err
-	}
-
-	return result, err
-}
-
 func generateConfig(ctx context.Context) (aws.Config, error) {
-	// Change config file for local use
-	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion("us-east-1"))
+	// cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion("us-east-1"))
+	cfg, err := config.LoadDefaultConfig(ctx, config.WithSharedConfigProfile("test"))
 	if err != nil {
 		log.Fatal(err)
 		return cfg, err
@@ -152,20 +131,17 @@ func handler(ctx context.Context, event events.S3Event) (events.APIGatewayProxyR
 
 	s3Client := s3.NewFromConfig(cfg)
 
-	client, err := db.NewClient(cfg, ctx)
-	if err != nil {
-		panic(err)
-	}
+	dynamoClient := dynamodb.NewFromConfig(cfg)
 
-	bucketBasics := BucketBasics{S3Client: s3Client}
+	bucketBasics := db.NewS3BucketBasics(s3Client)
 
-	tableBasis := db.NewTableBasis("members", client)
+	tableBasis := db.NewDynamoTableBasics("members", dynamoClient)
 
 	for _, record := range event.Records {
 		bucket := record.S3.Bucket.Name
 		key := record.S3.Object.URLDecodedKey
 
-		fileStream, err := bucketBasics.downloadFile(ctx, &s3.GetObjectInput{Bucket: aws.String(bucket), Key: aws.String(key)})
+		fileStream, err := bucketBasics.DownloadFile(ctx, &s3.GetObjectInput{Bucket: aws.String(bucket), Key: aws.String(key)})
 		if err != nil {
 			panic(err)
 		}

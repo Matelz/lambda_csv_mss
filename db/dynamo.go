@@ -4,30 +4,23 @@ import (
 	"context"
 	"log"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
 
-type TableBasis struct {
+type DynamoTableBasics struct {
 	DynamoDbClient *dynamodb.Client
 	TableName      string
 }
 
-func NewClient(cfg aws.Config, ctx context.Context) (*dynamodb.Client, error) {
-	client := dynamodb.NewFromConfig(cfg)
-
-	return client, nil
-}
-
-func NewTableBasis(tableName string, client *dynamodb.Client) TableBasis {
-	return TableBasis{
+func NewDynamoTableBasics(tableName string, client *dynamodb.Client) DynamoTableBasics {
+	return DynamoTableBasics{
 		DynamoDbClient: client,
 		TableName:      tableName,
 	}
 }
 
-func (tb TableBasis) AddMembersBatch(ctx context.Context, requests []types.WriteRequest) (int, error) {
+func (tb DynamoTableBasics) AddMembersBatch(ctx context.Context, requests []types.WriteRequest) (int, error) {
 	var written int64 = 0
 
 	batch := make(map[string][]types.WriteRequest)
