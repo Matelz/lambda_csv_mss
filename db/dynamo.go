@@ -36,8 +36,6 @@ func (tb DynamoTableBasics) AddMembersBatch(ctx context.Context, requests []type
 
 	if len(op.UnprocessedItems) > 0 {
 		log.Printf("Unprocessed items: %v", op.UnprocessedItems)
-	} else {
-		log.Printf("Successfully wrote batch")
 	}
 
 	written = int64(len(requests))
@@ -46,6 +44,5 @@ func (tb DynamoTableBasics) AddMembersBatch(ctx context.Context, requests []type
 		return 0, nil
 	}
 
-	log.Printf("Total members written: %d", written)
 	return int(written), nil
 }

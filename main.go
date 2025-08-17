@@ -3,14 +3,13 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"sync"
 
-	"bufio"
 	"encoding/csv"
 	"golangcsvparser/db"
 	t "golangcsvparser/types"
-	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
@@ -23,6 +22,10 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 )
 
+const (
+	batchSize uint8 = 25
+)
+
 var ExpectedHeaders = [7]string{
 	"nome",
 	"ra",
@@ -33,52 +36,47 @@ var ExpectedHeaders = [7]string{
 	"entidade",
 }
 
-func parseRow(row string) t.EntradaMembro {
-	values := csv.NewReader(strings.NewReader(row))
-	record, err := values.Read()
-	if err != nil {
-		fmt.Printf("Error reading CSV row: %v\n", err)
-		return t.EntradaMembro{}
-	}
-
-	if len(record) != len(ExpectedHeaders) {
-		fmt.Printf("Unexpected number of columns. Expected %d, got %d\n", len(ExpectedHeaders), len(record))
-		return t.EntradaMembro{}
-	}
-
-	member := t.EntradaMembro{
-		Nome:     record[0],
-		RA:       record[1],
-		Curso:    record[2],
-		Serie:    record[3],
-		Role:     record[4],
-		Status:   record[5],
-		Entidade: record[6],
-	}
-
-	return member
-}
+var (
+	s3Client     *s3.Client
+	dynamoClient *dynamodb.Client
+	initOnce     sync.Once
+)
 
 func parseCSV(fileObj *s3.GetObjectOutput, tb db.DynamoTableBasics, ctx context.Context) error {
 	defer fileObj.Body.Close()
+	reader := csv.NewReader(fileObj.Body)
+	reader.ReuseRecord = true
 
-	scanner := bufio.NewScanner(fileObj.Body)
-	scanner.Scan()
-
-	var counter int = 0
 	var buffer []types.WriteRequest
 
 	var wg sync.WaitGroup
 
-	for scanner.Scan() {
-		row := scanner.Text()
-		member := parseRow(row)
+	for {
+		record, err := reader.Read()
+		if err != nil {
+			if err.Error() == io.EOF.Error() {
+				break
+			}
+		}
 
-		counter++
+		if len(record) != len(ExpectedHeaders) {
+			fmt.Printf("Unexpected number of columns. Expected %d, got %d\n", len(ExpectedHeaders), len(record))
+			continue
+		}
+
+		member := t.EntradaMembro{
+			Nome:     record[0],
+			RA:       record[1],
+			Curso:    record[2],
+			Serie:    record[3],
+			Role:     record[4],
+			Status:   record[5],
+			Entidade: record[6],
+		}
 
 		item, err := attributevalue.MarshalMap(member)
 		if err != nil {
-			fmt.Printf("Error marshalling item %d: %v\n", counter, err)
+			fmt.Printf("Error marshalling item: %v\n", err)
 			continue
 		}
 
@@ -88,7 +86,7 @@ func parseCSV(fileObj *s3.GetObjectOutput, tb db.DynamoTableBasics, ctx context.
 			},
 		})
 
-		if len(buffer) >= 10 {
+		if len(buffer) >= int(batchSize) {
 			wg.Add(1)
 			go func(members []types.WriteRequest) {
 				defer wg.Done()
@@ -123,15 +121,6 @@ func generateConfig(ctx context.Context) (aws.Config, error) {
 }
 
 func handler(ctx context.Context, event events.S3Event) (events.APIGatewayProxyResponse, error) {
-	cfg, err := generateConfig(ctx)
-	if err != nil {
-		panic(err)
-	}
-
-	s3Client := s3.NewFromConfig(cfg)
-
-	dynamoClient := dynamodb.NewFromConfig(cfg)
-
 	bucketBasics := db.NewS3BucketBasics(s3Client)
 
 	tableBasis := db.NewDynamoTableBasics("members", dynamoClient)
@@ -140,7 +129,7 @@ func handler(ctx context.Context, event events.S3Event) (events.APIGatewayProxyR
 		bucket := record.S3.Bucket.Name
 		key := record.S3.Object.URLDecodedKey
 
-		fileStream, err := bucketBasics.DownloadFile(ctx, &s3.GetObjectInput{Bucket: aws.String(bucket), Key: aws.String(key)})
+		fileStream, err := bucketBasics.StreamFile(ctx, &s3.GetObjectInput{Bucket: aws.String(bucket), Key: aws.String(key)})
 		if err != nil {
 			panic(err)
 		}
@@ -151,6 +140,14 @@ func handler(ctx context.Context, event events.S3Event) (events.APIGatewayProxyR
 	return events.APIGatewayProxyResponse{
 		StatusCode: 200,
 	}, nil
+}
+
+func init() {
+	initOnce.Do(func() {
+		cfg, _ := generateConfig(context.Background())
+		s3Client = s3.NewFromConfig(cfg)
+		dynamoClient = dynamodb.NewFromConfig(cfg)
+	})
 }
 
 func main() {

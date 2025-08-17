@@ -20,7 +20,7 @@ func GenerateMemberMock(size int) ([]types.EntradaMembro, error) {
 	writer := csv.NewWriter(file)
 	defer writer.Flush()
 
-	for i := 0; i < size; i++ {
+	for i := range size {
 		membros[i] = types.EntradaMembro{
 			Nome: gofakeit.Name(),
 			RA:   gofakeit.Regex(`[0-9]{2}\.[0-9]{5}-[0-9]{1}`),
