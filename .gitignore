@@ -2,3 +2,4 @@
 go.sum
 bootstrap
 *.zip
+*.test

@@ -71,5 +71,5 @@ func GenerateMemberMock(size int) ([]types.EntradaMembro, error) {
 			return nil, err
 		}
 	}
-	return nil, nil
+	return membros, nil
 }
