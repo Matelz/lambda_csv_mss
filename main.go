@@ -46,8 +46,11 @@ var (
 
 func parseCSV(fileObj *s3.GetObjectOutput, tb db.DynamoTableBasics, ctx context.Context) error {
 	defer fileObj.Body.Close()
+	
+	// Use buffered reader for better I/O performance
 	reader := csv.NewReader(fileObj.Body)
 	reader.ReuseRecord = true
+	reader.FieldsPerRecord = len(ExpectedHeaders) // Validate field count automatically
 
 	// Pre-allocate buffer with initial capacity to reduce memory allocations
 	buffer := make([]types.WriteRequest, 0, bufferSize)
@@ -59,16 +62,17 @@ func parseCSV(fileObj *s3.GetObjectOutput, tb db.DynamoTableBasics, ctx context.
 	// Start worker goroutines
 	for i := 0; i < maxWorkers; i++ {
 		wg.Add(1)
-		go func() {
+		go func(workerID int) {
 			defer wg.Done()
 			for batch := range batchChan {
 				if _, err := tb.AddMembersBatch(ctx, batch); err != nil {
-					log.Printf("Error processing batch: %v", err)
+					log.Printf("Worker %d: Error processing batch: %v", workerID, err)
 				}
 			}
-		}()
+		}(i)
 	}
 
+	recordCount := 0
 	// Process CSV records
 	for {
 		record, err := reader.Read()
@@ -80,10 +84,7 @@ func parseCSV(fileObj *s3.GetObjectOutput, tb db.DynamoTableBasics, ctx context.
 			continue
 		}
 
-		if len(record) != len(ExpectedHeaders) {
-			fmt.Printf("Unexpected number of columns. Expected %d, got %d\n", len(ExpectedHeaders), len(record))
-			continue
-		}
+		recordCount++
 
 		member := t.EntradaMembro{
 			Nome:     record[0],
@@ -144,6 +145,7 @@ func parseCSV(fileObj *s3.GetObjectOutput, tb db.DynamoTableBasics, ctx context.
 	close(batchChan)
 	wg.Wait()
 
+	log.Printf("Successfully processed %d CSV records", recordCount)
 	return nil
 }
 
