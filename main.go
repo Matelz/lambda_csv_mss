@@ -23,7 +23,9 @@ import (
 )
 
 const (
-	batchSize uint8 = 25
+	batchSize    uint8 = 25
+	maxWorkers   int   = 10  // Number of concurrent workers for batch processing
+	bufferSize   int   = 100 // Initial buffer capacity to reduce allocations
 )
 
 var ExpectedHeaders = [7]string{
@@ -47,16 +49,35 @@ func parseCSV(fileObj *s3.GetObjectOutput, tb db.DynamoTableBasics, ctx context.
 	reader := csv.NewReader(fileObj.Body)
 	reader.ReuseRecord = true
 
-	var buffer []types.WriteRequest
+	// Pre-allocate buffer with initial capacity to reduce memory allocations
+	buffer := make([]types.WriteRequest, 0, bufferSize)
 
+	// Worker pool for batch processing
+	batchChan := make(chan []types.WriteRequest, maxWorkers)
 	var wg sync.WaitGroup
 
+	// Start worker goroutines
+	for i := 0; i < maxWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for batch := range batchChan {
+				if _, err := tb.AddMembersBatch(ctx, batch); err != nil {
+					log.Printf("Error processing batch: %v", err)
+				}
+			}
+		}()
+	}
+
+	// Process CSV records
 	for {
 		record, err := reader.Read()
 		if err != nil {
 			if err.Error() == io.EOF.Error() {
 				break
 			}
+			log.Printf("Error reading CSV record: %v", err)
+			continue
 		}
 
 		if len(record) != len(ExpectedHeaders) {
@@ -86,25 +107,41 @@ func parseCSV(fileObj *s3.GetObjectOutput, tb db.DynamoTableBasics, ctx context.
 			},
 		})
 
+		// Send batch when full
 		if len(buffer) >= int(batchSize) {
-			wg.Add(1)
-			go func(members []types.WriteRequest) {
-				defer wg.Done()
-				tb.AddMembersBatch(ctx, members)
-			}(buffer)
-
-			buffer = nil
+			// Make a copy of the batch to send to worker
+			batchCopy := make([]types.WriteRequest, len(buffer))
+			copy(batchCopy, buffer)
+			
+			select {
+			case batchChan <- batchCopy:
+			case <-ctx.Done():
+				close(batchChan)
+				wg.Wait()
+				return ctx.Err()
+			}
+			
+			// Reset buffer, reusing underlying array capacity
+			buffer = buffer[:0]
 		}
 	}
 
+	// Send remaining items in buffer
 	if len(buffer) > 0 {
-		wg.Add(1)
-		go func(members []types.WriteRequest) {
-			defer wg.Done()
-			tb.AddMembersBatch(ctx, members)
-		}(buffer)
+		batchCopy := make([]types.WriteRequest, len(buffer))
+		copy(batchCopy, buffer)
+		
+		select {
+		case batchChan <- batchCopy:
+		case <-ctx.Done():
+			close(batchChan)
+			wg.Wait()
+			return ctx.Err()
+		}
 	}
 
+	// Close channel and wait for all workers to finish
+	close(batchChan)
 	wg.Wait()
 
 	return nil
